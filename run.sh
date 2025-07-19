@@ -1,0 +1,1 @@
+java -jar virtualthread-rabbitmq-test.jar RABBIT_HOST=localhost QUEUE_NAME=perf.queue TEST_DURATION_SECONDS=10 connOptions=4,8,16 channelPerConnOptions=64,128 filepath=test.png REPLY_TO=reply.queue.name
