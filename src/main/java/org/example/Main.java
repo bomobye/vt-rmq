@@ -67,10 +67,10 @@ public class Main {
             System.out.println("🧹 Queue temizlendi: " + queueName);
         }
 
-        AMQP.BasicProperties props = new AMQP.BasicProperties.Builder()
-                .deliveryMode(1)
-                .replyTo(replyTo_.isEmpty() ? null : replyTo_)
-                .build();
+//        AMQP.BasicProperties props = new AMQP.BasicProperties.Builder()
+//                .deliveryMode(1)
+//                .replyTo(replyTo_.isEmpty() ? null : replyTo_)
+//                .build();
 
         Connection[] connections = new Connection[connCount];
         for (int i = 0; i < connCount; i++) {
@@ -92,6 +92,12 @@ public class Main {
                 try {
                     while (Instant.now().isBefore(endTime)) {
                         Instant start = Instant.now();
+                        String correlationId = UUID.randomUUID().toString();
+                        AMQP.BasicProperties props = new AMQP.BasicProperties.Builder()
+                                .deliveryMode(1)
+                                .replyTo(replyTo_)
+                                .correlationId(correlationId)
+                                .build();
                         channel.basicPublish("", queueName, props, message);
                         long latency = Duration.between(start, Instant.now()).toNanos();
                         totalLatency.add(latency);
