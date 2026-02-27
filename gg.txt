@@ -1,0 +1,230 @@
+1. NVIDIA GSP Firmware Kapatma (En Kritik Adım)
+
+Şu Anki Durumu Nasıl Kontrol Edilir?
+Terminalde şu komutu çalıştırın:
+cat /sys/module/nvidia/parameters/NVreg_EnableGpuFirmware
+
+Çıktı 1 ise: GSP açıktır (Kapatmamız gerekiyor).
+
+Çıktı 0 ise: GSP zaten kapalıdır (Bu adımı atlayabilirsiniz).
+
+echo "options nvidia NVreg_EnableGpuFirmware=0" | sudo tee /etc/modprobe.d/nvidia-gsp.conf
+sudo update-initramfs -u
+(Bu işlemden sonra sunucuyu yeniden başlatmanız gerekecektir, ancak diğer GRUB adımlarını da yapıp tek seferde yeniden başlatabilirsiniz).
+
+2. Kalıcılık Modunu (Persistence Mode) Aktif Etme
+Sürücünün GPU modüllerini sürekli uykuya alıp tekrar uyandırmaya çalışmasını (ve bu sırada başarısız olmasını) engeller.
+
+Şu Anki Durumu Nasıl Kontrol Edilir?
+Terminalde şu komutu çalıştırın:
+nvidia-smi -q | grep -i "Persistence Mode"
+
+Çıktıda Disabled yazıyorsa: Kapalıdır (Açmamız gerekiyor).
+
+Çıktıda Enabled yazıyorsa: Zaten açıktır (Atlayabilirsiniz).
+
+Nasıl Uygulanır?
+Anında aktif etmek için:
+sudo nvidia-smi -pm 1
+Her yeniden başlatmada otomatik aktif olması için servisi etkinleştirin:
+sudo systemctl enable nvidia-persistenced
+
+3. PCIe ASPM (Aktif Durum Güç Yönetimi) Kapatma
+İşletim sisteminin PCIe slotlarına giden gücü kısmasını ve kartların derin uykuya geçip kilitlenmesini engeller.
+
+Şu Anki Durumu Nasıl Kontrol Edilir?
+Sistemin bu parametreyle başlayıp başlamadığını görmek için şunu çalıştırın:
+cat /proc/cmdline | grep pcie_aspm=off
+
+Çıktı boş dönüyorsa: ASPM kapatılmamıştır (Uygulamamız gerekiyor).
+
+Çıktıda pcie_aspm=off metnini görüyorsanız: Zaten kapalıdır (Atlayabilirsiniz).
+
+Nasıl Uygulanır?
+GRUB dosyasını düzenleyeceğiz:
+sudo nano /etc/default/grub
+GRUB_CMDLINE_LINUX_DEFAULT ile başlayan satırı bulun. Tırnak işaretlerinin içine bir boşluk bırakarak pcie_aspm=off ekleyin.
+(Örnek görünüm: GRUB_CMDLINE_LINUX_DEFAULT="quiet splash pcie_aspm=off")
+Dosyayı kaydedip çıkın (Nano için: CTRL+O, Enter, CTRL+X). Ardından ayarları uygulayın:
+sudo update-grub
+
+
+5. BIOS Ayarları: Above 4G Decoding
+8 adet GPU'nun belleğini (VRAM) sisteme doğru bir şekilde adresleyebilmek için bu anakart özelliğinin kesinlikle açık olması gerekir.
+
+Şu Anki Durumu Nasıl Kontrol Edilir?
+Terminalde şunu çalıştırın:
+dmesg | grep -i "PCI:.* BAR"
+
+Çıktıda "assigned" veya BAR adreslemeleri görüyorsanız genelde aktiftir, ancak en kesin kontrol BIOS ekranından yapılır.
+
+Nasıl Uygulanır?
+Sunucuyu yeniden başlatın, BIOS ayarlarına girin. PCIe veya Advanced ayarlar sekmesinde "Above 4G Decoding" ayarını bulun ve Enabled yapın. (Varsa "Resizable BAR" seçeneğini de Enabled yapabilirsiniz).
+
+
+6.iommu=soft idle=nomwait
+
+1. iommu=soft (Giriş/Çıkış Bellek Yönetimi)
+Normalde işlemci (CPU) ile GPU arasındaki veri trafiğini yöneten bir donanım birimi (IOMMU) vardır. Ancak bazen donanımsal IOMMU, 8 tane GPU'nun devasa bellek adreslerini yönetirken "sapıtır" veya çakışma yaşar.
+
+Ne Yapar? Donanımsal IOMMU yerine, bu işlemi yazılımsal olarak (Software IOMMU / Bounce Buffers) yönetmesini söyler.
+
+Senin Sorununla İlgisi: Eğer GPU'ların bellek adresleri çakıştığı için sistemden düşüyorsa, bu parametre trafiği daha güvenli (ama bir tık daha yavaş) bir yola sokarak kartın "başlatılamadı" hatası vermesini engeller.
+
+2. idle=nomwait (İşlemci Uyku Modu Kısıtlaması)
+Modern işlemciler güç tasarrufu yapmak için çok derin uyku modlarına (C-States) girerler. MWAIT komutu, işlemciyi bu derin uykudan uyandırmak için kullanılır.
+
+Ne Yapar? İşlemcinin MWAIT komutunu kullanmasını engeller. İşlemciyi daha "tetikte" tutar.
+
+Senin Sorununla İlgisi: Bazen işlemci çok derin uykuya daldığında, PCIe hattındaki GPU'dan gelen sinyale vaktinde cevap veremez. Bu gecikme, sürücünün (driver) GPU ile bağının kopmasına ve "RmInitAdapter failed" (yani 'kartla bağlantım koptu, tekrar başlatamıyorum') hatasına yol açar.
+
+Bunları Yapmalı mısın?
+Evet, 8 GPU'lu sistemlerde stabilite için bu ikisi (özellikle idle=nomwait) hayat kurtarıcı olabilir.
+
+Nasıl Kontrol Edilir?
+Şu an aktif olup olmadıklarını şu komutla görebilirsin:
+cat /proc/cmdline
+(Eğer çıktı içinde bu kelimeleri görmüyorsan aktif değillerdir.)
+
+Nasıl Eklenir?
+Daha önce konuştuğumuz GRUB dosyasına ekleyebilirsin:
+
+sudo nano /etc/default/grub
+
+GRUB_CMDLINE_LINUX_DEFAULT satırının sonuna (tırnak içine) bunları ekle.
+Örnek: GRUB_CMDLINE_LINUX_DEFAULT="quiet splash pcie_aspm=off idle=nomwait"
+
+sudo update-grub ve sudo reboot.
+
+Özet Liste (Son Durum)
+Senin durumunda en sağlıklı konfigürasyon satırı şu olmalı:
+GRUB_CMDLINE_LINUX_DEFAULT="quiet splash pcie_aspm=off idle=nomwait"
+
+Bu parametreleri ekledikten sonra nvidia-smi çıktısının gidip gitmediğini birkaç saat gözlemlemek ister misin? Eğer hala gidiyorsa, Xid hata koduna bakmamız şart olacak.
+
+
+Tüm bu kontrolleri yapıp, gerekli olanları uyguladıktan sonra sunucunuzu yeniden başlatmanız (sudo reboot) tüm ayarların temiz bir şekilde devreye girmesini sağlayacaktır.
+
+-----------
+
+
+Maksimum Performans Moduna Al (Opsiyonel ama Tavsiye)
+Normalde kartlar "Auto" modundadır. Hiçbir şey çalışmıyorken bile kartların yüksek saat hızında kalmasını zorlayabiliriz (bu, güç dalgalanmasını önler).
+
+Yap: ```bash
+sudo nvidia-smi -pc 1  # Tüm kartları "Prefer Maximum Performance" moduna sokar
+
+
+
+sudo update-initramfs -u
+
+sudo reboot
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Sorun yaşandığı anda (reboot etmeden önce) şunları al:
+
+# 1) Kernel loglarında PCIe/AER ve Xid araması
+sudo dmesg -T | egrep -i "NVRM|Xid|RmInitAdapter|AER|pcie|PCIe Bus Error|fallen off"
+
+# 2) Sistem logu (kernel)
+sudo journalctl -k -b --no-pager | egrep -i "NVRM|Xid|RmInitAdapter|AER|pcie|fallen off"
+
+# 3) PCIe link detayları (özellikle "LnkSta", "AER", "Fatal")
+for d in /sys/bus/pci/devices/*; do
+  [ -f "$d/vendor" ] && grep -q 0x10de "$d/vendor" && echo "=== $d ===" && sudo lspci -s "$(basename "$d")" -vv | egrep -i "LnkSta|LnkCap|AER|Fatal|Non-Fatal|Corrected"
+done
+
+# 4) NVIDIA bug report (en değerlisi)
+sudo nvidia-bug-report.sh
+
+
+Eğer loglarda AER “Fatal” veya “link down / surprise down / completion timeout” gibi şeyler görürsen, olayın %80’i “driver değil PCIe link/power”dır.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+BIOS Ayarları: Above 4G Decoding
+
+Sunucu anakartlarında Above 4G Decoding seçeneği bazen farklı isimlerle gizlenmiş olabilir veya bazı üst düzey sunucu modellerinde (özellikle belirli Dell veya HP modellerinde) bu özellik mimari gereği zaten hep açıktır ve menüden kaldırılmıştır.
+
+Ancak 8 GPU'lu bir sistemde bu ayarın kapalı olması "Resource Allocation Error" veya senin aldığın "Init Failed" hatalarının ana sebebidir. İşte bu ayarı bulmana yardımcı olacak ipuçları ve alternatif isimler:
+
+1. Diğer Olası İsimler ve Yerler
+BIOS içinde şu isimlerden birini görüp görmediğini kontrol et:
+
+Memory Mapped I/O above 4GB (En yaygın alternatif isim)
+
+PCI 64-bit Resource Allocation
+
+Large BAR Support
+
+PCIe High Hole (Nadir ama bazı Supermicro modellerinde bulunur)
+
+Resizable BAR Support (Eğer bunu görürsen, Above 4G otomatik olarak içinde veya yanında gelir)
+
+2. Hangi Menülerin Altında Olabilir?
+Genelde şu sekmelerin içine gizlenir:
+
+Advanced > PCI Subsystem Settings (En olası yer burasıdır)
+
+Advanced > Chipset Configuration
+
+Advanced > System Agent (SA) Configuration
+
+Socket Configuration > IIO Configuration
+
+3. İşletim Sistemi Üzerinden Kontrol (BIOS'a Bakmadan)
+BIOS'ta bulamadığın bu ayarın aslında açık olup olmadığını şu komutla Linux üzerinden teyit edebiliriz:
+
+Bash
+dmesg | grep -i "remapping"
+Veya daha garantisi:
+
+Bash
+sudo lspci -vd 10de:* | grep -A 5 "Region"
+Kontrol: Eğer çıktıdaki "Region" satırlarında [mem 0x... (64-bit, prefetchable)] gibi devasa adresler (örneğin 32G veya 64G gibi yüksek adresleme aralıkları) görüyorsan, Above 4G Decoding zaten açıktır. Eğer hepsi düşük adreslerdeyse (32-bit sınırında) kapalı demektir.
+
+Eğer Gerçekten Yoksa Ne Yapmalı?
+Eğer BIOS'un çok eskiyse veya üretici bu ayarı kilitlediyse, 8 kartı adresleyemiyor olabilirsin. Şu iki adımı mutlaka dene:
+
+BIOS Güncelleme: 8 GPU desteği genellikle BIOS güncellemeleriyle stabilize edilir. Üreticinin sitesinden en son sürümü kontrol et.
+
+CSM (Compatibility Support Module) Kapatma: BIOS'ta "Boot" veya "Advanced" sekmesinde CSM ayarını bul ve Disabled yap. CSM (eski BIOS modu) açıkken Above 4G Decoding çoğu zaman düzgün çalışmaz veya BIOS bu seçeneği göstermez. Sistemi UEFI Only moduna aldığında Above 4G seçeneği belirebilir.
+
+Sana daha spesifik yardımcı olabilmem için: Anakartının veya sunucunun marka/modelini (Örn: Supermicro X11DPG, Dell R750 vb.) söyleyebilir misin? Manuelinden tam yerini bulup sana söyleyebilirim.
